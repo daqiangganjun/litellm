@@ -437,9 +437,14 @@ class RouterBudgetLimiting(CustomLogger):
                 response_cost=response_cost,
             )
 
-        request_tags: Final = _get_tags_from_request_kwargs(
-            kwargs,
-            metadata_variable_name=get_metadata_variable_name_from_kwargs(kwargs or {}),
+        payload_request_tags: Final = standard_logging_payload.get("request_tags")
+        request_tags: Final = (
+            [tag for tag in payload_request_tags if isinstance(tag, str)]
+            if isinstance(payload_request_tags, list)
+            else _get_tags_from_request_kwargs(
+                kwargs,
+                metadata_variable_name=get_metadata_variable_name_from_kwargs(kwargs or {}),
+            )
         )
         if len(request_tags) > 0:
             for _tag in request_tags:
