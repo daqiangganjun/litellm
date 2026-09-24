@@ -159,7 +159,7 @@ async def test_tag_spend_uses_normalized_payload(disable_budget_sync):
         _success_kwargs(
             provider_in_litellm_params=None,
             provider_in_payload=None,
-            payload_request_tags=["service:responses"],
+            payload_request_tags=["service:responses", ["invalid"]],
             legacy_request_tags=["service:chat"],
         ),
     )

@@ -439,7 +439,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         payload_request_tags: Final = standard_logging_payload.get("request_tags")
         request_tags: Final = (
-            payload_request_tags
+            [tag for tag in payload_request_tags if isinstance(tag, str)]
             if isinstance(payload_request_tags, list)
             else _get_tags_from_request_kwargs(
                 kwargs,
