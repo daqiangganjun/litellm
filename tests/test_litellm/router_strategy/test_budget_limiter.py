@@ -1,15 +1,18 @@
-"""
-Spend tracking in RouterBudgetLimiting.async_log_success_event.
+"""Spend tracking in RouterBudgetLimiting.async_log_success_event.
 
 Only chat completions puts custom_llm_provider into litellm_params. The responses,
 anthropic_messages, embedding and rerank surfaces leave it unset, which used to make
 the callback raise before any spend was recorded, so those budgets never moved.
+
+Responses exposes normalized request tags in the standard logging payload rather
+than the legacy request kwargs consumed by the budget callback.
 """
 
 import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.types.utils import BudgetConfig, GenericBudgetConfigType
 
 
 @pytest.fixture
@@ -30,10 +33,14 @@ def _success_kwargs(
     call_type: str = "aresponses",
     response_cost: float = 0.25,
     model_id: str = "deployment-1",
+    payload_request_tags: list[str] | None = None,
+    legacy_request_tags: list[str] | None = None,
 ) -> dict:
     litellm_params = {"model": "openai/gpt-4o"}
     if provider_in_litellm_params is not None:
         litellm_params["custom_llm_provider"] = provider_in_litellm_params
+    if legacy_request_tags is not None:
+        litellm_params["metadata"] = {"tags": legacy_request_tags}
 
     return {
         "call_type": call_type,
@@ -42,12 +49,17 @@ def _success_kwargs(
             "response_cost": response_cost,
             "model_id": model_id,
             "custom_llm_provider": provider_in_payload,
+            "request_tags": payload_request_tags,
         },
     }
 
 
 async def _log_success(limiter: RouterBudgetLimiting, kwargs: dict) -> None:
     await limiter.async_log_success_event(kwargs=kwargs, response_obj=None, start_time=None, end_time=None)
+
+
+def _tag_budget_config(*tags: str) -> GenericBudgetConfigType:
+    return {tag: BudgetConfig(budget_limit=10.0, time_period="1d") for tag in tags}
 
 
 @pytest.mark.asyncio
@@ -132,3 +144,46 @@ async def test_deployment_budget_tracked_when_provider_is_unresolvable(disable_b
     )
 
     assert await limiter.dual_cache.async_get_cache("deployment_spend:deployment-1:1d") == 0.25
+
+
+@pytest.mark.asyncio
+async def test_tag_spend_uses_normalized_payload(disable_budget_sync):
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config=None,
+    )
+    limiter.tag_budget_config = _tag_budget_config("service:responses", "service:chat")
+
+    await _log_success(
+        limiter,
+        _success_kwargs(
+            provider_in_litellm_params=None,
+            provider_in_payload=None,
+            payload_request_tags=["service:responses"],
+            legacy_request_tags=["service:chat"],
+        ),
+    )
+
+    assert await limiter.dual_cache.async_get_cache("tag_spend:service:responses:1d") == 0.25
+    assert await limiter.dual_cache.async_get_cache("tag_spend:service:chat:1d") in (None, 0.0)
+
+
+@pytest.mark.asyncio
+async def test_tag_spend_falls_back_to_legacy_request_kwargs(disable_budget_sync):
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config=None,
+    )
+    limiter.tag_budget_config = _tag_budget_config("service:chat")
+
+    await _log_success(
+        limiter,
+        _success_kwargs(
+            provider_in_litellm_params=None,
+            provider_in_payload=None,
+            call_type="acompletion",
+            legacy_request_tags=["service:chat"],
+        ),
+    )
+
+    assert await limiter.dual_cache.async_get_cache("tag_spend:service:chat:1d") == 0.25
